@@ -1,0 +1,16 @@
+{
+  "name": "playwright-qwen-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headless": "playwright test",
+    "test:headed": "HEADLESS=false playwright test",
+    "test:debug": "HEADLESS=false playwright test --debug",
+    "test:ui": "playwright test --ui",
+    "test:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1"
+  }
+}
