@@ -23,7 +23,7 @@ logger = setup_logger(__name__)
 
 
 class TestGenerator:
-    """测试代码生成器（增强版）"""
+    """测试代码生成器"""
     
     def __init__(self, use_templates: bool = True):
         """

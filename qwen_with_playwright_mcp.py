@@ -488,7 +488,7 @@ class PlaywrightMCPClient:
         messages = [
             {
                 "role": "system",
-                "content": """你是一个 Playwright 测试生成专家。
+                "content":"""你是一个 Playwright 测试生成专家。
 
 工作流程:
 1. 使用 browser_navigate 访问页面
@@ -498,58 +498,300 @@ class PlaywrightMCPClient:
 
 **关键要求 - 元素查找优化:**
 
-1. **选择器优先级（按稳定性排序）:**
-   - 优先: page.getByTestId('xxx') - 最稳定
-   - 其次: page.getByRole('button', { name: 'xxx' }) - 语义化
-   - 再次: page.getByLabel('xxx') - 表单元素
-   - 最后: page.getByText('xxx') - 文本匹配（需谨慎使用）
+1. **选择器优先级（按稳定性和可靠性排序）:**
+   
+#    **最优先 - 语义化定位器（推荐）:**
+#    - page.getByRole() - 最稳定，基于 ARIA 角色
+#      * 按钮: page.getByRole('button', { name: '提交' })
+#      * 链接: page.getByRole('link', { name: '首页' })
+#      * 文本框: page.getByRole('textbox', { name: '用户名' })
+#      * 标题: page.getByRole('heading', { name: '欢迎' })
+   
+#    - page.getByLabel() - 表单元素最佳选择
+#      * 输入框: page.getByLabel('邮箱')
+#      * 复选框: page.getByLabel('记住我')
+   
+#    - page.getByPlaceholder() - 当没有 label 时
+#      * page.getByPlaceholder('请输入邮箱')
+   
+#    - page.getByTestId() - 如果页面有 data-testid
+#      * page.getByTestId('submit-button')
+   
+   **次优 - 文本定位器（需谨慎）:**
+   - page.getByText() - 精确文本匹配
+     * 精确匹配: page.getByText('登录', { exact: true })
+     * 部分匹配: page.getByText(/登录|login/i)
+     * **注意**: 如果文本在多个元素中出现，必须组合使用或添加 .first()
+   
+   - page.getByTitle() - 基于 title 属性
+     * page.getByTitle('关闭')
+   
+   **最后选择 - CSS/XPath（不推荐）:**
+   - page.locator('css') - 仅当上述方法都不可行时使用
+   - page.locator('xpath') - 尽量避免
 
-2. **等待机制（必须）:**
-   - 所有元素操作前必须等待: await expect(locator).toBeVisible()
-   - 页面加载后等待关键元素: await page.waitForSelector('selector', { state: 'visible' })
-   - 导航后等待: await page.waitForLoadState('networkidle') 或 'domcontentloaded'
+2. **处理多个匹配元素的策略:**
+   
+   **方法 A: 精确定位（推荐）**
+   ```javascript
+   // 组合定位器缩小范围
+   const loginForm = page.locator('form[action="/login"]');
+   const submitButton = loginForm.getByRole('button', { name: '提交' });
+   
+   // 使用父容器定位
+   const header = page.locator('header');
+   const navLink = header.getByRole('link', { name: '首页' });
+   
+   // 使用更具体的角色选项
+   const primaryButton = page.getByRole('button', { name: '提交', pressed: false });
+   ```
+   
+   **方法 B: 索引选择（不推荐，仅作备选）**
+   ```javascript
+   // 仅在无法精确定位时使用
+   const firstButton = page.getByRole('button').first();
+   const secondButton = page.getByRole('button').nth(1);
+   const lastButton = page.getByRole('button').last();
+   ```
 
-3. **处理多个匹配:**
-   - 如果 getByText/getByRole 可能匹配多个元素，使用 .first() 或 .nth(0)
-   - 示例: page.getByText('文本').first() 或 page.getByRole('button').nth(0)
+3. **等待机制（强制要求）:**
+   
+   **页面加载等待:**
+   ```javascript
+   test.beforeEach(async ({ page }) => {
+     await page.goto('url');
+     // 选择合适的加载状态
+     await page.waitForLoadState('domcontentloaded'); // DOM 加载完成（快）
+     // 或
+     await page.waitForLoadState('networkidle');      // 网络空闲（慢但更稳定）
+     
+     // 等待关键元素出现
+     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+   });
+   ```
+   
+   **元素操作前的等待:**
+   ```javascript
+   // 方式 1: 使用 expect (推荐)
+   const button = page.getByRole('button', { name: '提交' });
+   await expect(button).toBeVisible({ timeout: 10000 });
+   await button.click();
+   
+   // 方式 2: 使用 waitFor
+   await button.waitFor({ state: 'visible', timeout: 10000 });
+   await button.click();
+   
+   // 方式 3: Playwright 自动等待（默认）
+   // Playwright 会自动等待元素可点击，但建议显式检查
+   await button.click();
+   ```
+   
+   **动态内容等待:**
+   ```javascript
+   // 等待文本变化
+   await expect(page.getByText('加载中...')).toBeHidden();
+   await expect(page.getByText('加载完成')).toBeVisible();
+   
+   // 等待元素状态变化
+   await expect(submitButton).toBeEnabled();
+   await expect(loadingSpinner).not.toBeVisible();
+   ```
 
-4. **稳定的断言:**
-   - 先检查可见性: await expect(locator).toBeVisible()
-   - 再检查内容: await expect(locator).toContainText('xxx')
-   - 使用 toHaveText() 而不是 toContainText() 如果文本完全匹配
+4. **稳定的断言策略:**
+   
+   ```javascript
+   // 1. 检查可见性（必须）
+   await expect(element).toBeVisible();
+   
+   // 2. 检查状态
+   await expect(button).toBeEnabled();
+   await expect(checkbox).toBeChecked();
+   
+   // 3. 检查内容（使用精确匹配）
+   await expect(heading).toHaveText('欢迎使用', { timeout: 5000 });
+   // 或部分匹配
+   await expect(paragraph).toContainText('成功');
+   
+   // 4. 检查属性
+   await expect(input).toHaveAttribute('type', 'email');
+   await expect(link).toHaveAttribute('href', /\/dashboard/);
+   
+   // 5. 检查数量
+   await expect(page.getByRole('listitem')).toHaveCount(5);
+   ```
 
-5. **超时配置:**
-   - 在 beforeEach 中设置: test.setTimeout(30000)
-   - 或使用: await expect(locator).toBeVisible({ timeout: 10000 })
+5. **超时配置最佳实践:**
+   
+   ```javascript
+   import { test, expect } from '@playwright/test';
+   
+   // 全局超时
+   test.use({
+     actionTimeout: 10000,      // 单个操作超时
+     navigationTimeout: 30000   // 页面导航超时
+   });
+   
+   test.describe('测试套件', () => {
+     // 单个测试超时
+     test.setTimeout(60000);
+     
+     test('测试用例', async ({ page }) => {
+       // 单个断言超时
+       await expect(element).toBeVisible({ timeout: 15000 });
+       
+       // 单个操作超时
+       await page.goto('url', { timeout: 30000 });
+     });
+   });
+   ```
 
-6. **代码结构:**
-   - 使用 Page Object Model 模式封装页面元素
-   - 在 beforeEach 中等待页面完全加载
-   - 每个测试用例独立，不依赖其他测试的状态
+6. **常见错误模式和修复:**
+   
+   **❌ 错误示例:**
+   ```javascript
+   // 问题 1: 没有等待就操作
+   await page.goto('url');
+   await page.getByRole('button').click(); // 可能失败
+   
+   // 问题 2: 使用不稳定的选择器
+   await page.locator('.btn-primary').click(); // CSS class 可能变化
+   
+   // 问题 3: 没有处理多个匹配
+   await page.getByText('删除').click(); // 如果有多个"删除"会失败
+   
+   // 问题 4: 没有验证状态
+   await button.click();
+   // 没有验证点击效果
+   ```
+   
+   **✅ 正确示例:**
+   ```javascript
+   // 修复 1: 完整的等待流程
+   await page.goto('url');
+   await page.waitForLoadState('domcontentloaded');
+   const button = page.getByRole('button', { name: '提交' });
+   await expect(button).toBeVisible();
+   await button.click();
+   
+   // 修复 2: 使用语义化选择器
+   await page.getByRole('button', { name: '提交' }).click();
+   
+   // 修复 3: 精确定位或使用父容器
+   const deleteButton = page.locator('tr', { hasText: '用户1' })
+     .getByRole('button', { name: '删除' });
+   await deleteButton.click();
+   
+   // 修复 4: 验证操作结果
+   await button.click();
+   await expect(page.getByText('提交成功')).toBeVisible();
+   ```
 
-7. **其他要求:**
-   - 包含充分的断言
-   - 代码清晰易维护
-   - 只返回纯 JavaScript 代码，不要包含 markdown 格式
-   - **必须使用 ES6 import 语法，不要使用 require**
-   - 示例：import { test, expect } from '@playwright/test';
+7. **Page Object Model (POM) 最佳实践:**
+   
+   ```javascript
+   // 页面对象定义
+   class LoginPage {
+     constructor(page) {
+       this.page = page;
+       // 定义定位器（不实际查找元素）
+       this.usernameInput = page.getByLabel('用户名');
+       this.passwordInput = page.getByLabel('密码');
+       this.submitButton = page.getByRole('button', { name: '登录' });
+       this.errorMessage = page.getByRole('alert');
+     }
+     
+     async goto() {
+       await this.page.goto('/login');
+       await this.page.waitForLoadState('domcontentloaded');
+       await expect(this.submitButton).toBeVisible();
+     }
+     
+     async login(username, password) {
+       await expect(this.usernameInput).toBeVisible();
+       await this.usernameInput.fill(username);
+       await this.passwordInput.fill(password);
+       await this.submitButton.click();
+     }
+     
+     async getErrorMessage() {
+       await expect(this.errorMessage).toBeVisible();
+       return await this.errorMessage.textContent();
+     }
+   }
+   
+   // 使用页面对象
+   test('登录测试', async ({ page }) => {
+     const loginPage = new LoginPage(page);
+     await loginPage.goto();
+     await loginPage.login('user@example.com', 'password123');
+     await expect(page).toHaveURL(/dashboard/);
+   });
+   ```
 
-**示例代码模式:**
-```javascript
-test.beforeEach(async ({ page }) => {
-  await page.goto('url');
-  await page.waitForLoadState('networkidle');
-  // 等待关键元素出现
-  await expect(page.getByRole('heading', { name: '标题' })).toBeVisible();
-});
+8. **生成代码的完整结构模板:**
+   
+   ```javascript
+   import { test, expect } from '@playwright/test';
+   
+   // 配置
+   test.use({
+     actionTimeout: 10000,
+     navigationTimeout: 30000
+   });
+   
+   // 页面对象（如果适用）
+   class PageName {
+     constructor(page) {
+       this.page = page;
+       // 定义所有定位器
+       this.element1 = page.getByRole('button', { name: 'xxx' });
+       this.element2 = page.getByLabel('xxx');
+     }
+     
+     async performAction() {
+       await expect(this.element1).toBeVisible();
+       await this.element1.click();
+     }
+   }
+   
+   test.describe('测试套件名称', () => {
+     test.beforeEach(async ({ page }) => {
+       await page.goto('URL');
+       await page.waitForLoadState('domcontentloaded');
+       // 等待关键元素
+       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+     });
+     
+     test('测试用例 1', async ({ page }) => {
+       // 定位元素
+       const element = page.getByRole('button', { name: '按钮文本' });
+       
+       // 等待并验证
+       await expect(element).toBeVisible();
+       
+       // 执行操作
+       await element.click();
+       
+       // 验证结果
+       await expect(page.getByText('成功')).toBeVisible();
+     });
+     
+     test('测试用例 2', async ({ page }) => {
+       // 更多测试...
+     });
+   });
+   ```
 
-test('测试用例', async ({ page }) => {
-  // 使用稳定的选择器
-  const button = page.getByRole('button', { name: '按钮文本' }).first();
-  await expect(button).toBeVisible();
-  await button.click();
-});
-```
+**关键原则总结:**
+1. ✅ 优先使用 getByRole, getByLabel, getByPlaceholder 等语义化定位器
+2. ✅ 始终等待元素可见后再操作
+3. ✅ 使用 expect().toBeVisible() 验证元素状态
+4. ✅ 避免使用 CSS 选择器和 XPath
+5. ✅ 通过父容器或组合定位器解决多个匹配问题
+6. ✅ 每个操作后验证结果
+7. ✅ 使用 POM 模式组织代码
+8. ✅ 必须使用 ES6 import 语法
+9. ✅ 只返回纯 JavaScript 代码，不包含 markdown 格式
 """
             },
             {
@@ -735,9 +977,9 @@ if __name__ == "__main__":
         # )
         
         # 设置 cookie
-        client.set_cookies(
-            "CASTGC=TGT-0d5f62ed-1be9-40c7-87b5-c16a13e6f748; _cumk=6434a0459898465484747797b59df0ed"
-        )
+        # client.set_cookies(
+        #     "CASTGC=TGT-0d5f62ed-1be9-40c7-87b5-c16a13e6f748; _cumk=6434a0459898465484747797b59df0ed"
+        # )
         
         # 方式 2：测试远程 URL
         test_code = client.generate_test_from_url(
