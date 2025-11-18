@@ -500,22 +500,22 @@ class PlaywrightMCPClient:
 
 1. **选择器优先级（按稳定性和可靠性排序）:**
    
-#    **最优先 - 语义化定位器（推荐）:**
-#    - page.getByRole() - 最稳定，基于 ARIA 角色
-#      * 按钮: page.getByRole('button', { name: '提交' })
-#      * 链接: page.getByRole('link', { name: '首页' })
-#      * 文本框: page.getByRole('textbox', { name: '用户名' })
-#      * 标题: page.getByRole('heading', { name: '欢迎' })
+   **最优先 - 语义化定位器（推荐）:**
+   - page.getByRole() - 最稳定，基于 ARIA 角色
+     * 按钮: page.getByRole('button', { name: '提交' })
+     * 链接: page.getByRole('link', { name: '首页' })
+     * 文本框: page.getByRole('textbox', { name: '用户名' })
+     * 标题: page.getByRole('heading', { name: '欢迎' })
    
-#    - page.getByLabel() - 表单元素最佳选择
-#      * 输入框: page.getByLabel('邮箱')
-#      * 复选框: page.getByLabel('记住我')
+   - page.getByLabel() - 表单元素最佳选择
+     * 输入框: page.getByLabel('邮箱')
+     * 复选框: page.getByLabel('记住我')
    
-#    - page.getByPlaceholder() - 当没有 label 时
-#      * page.getByPlaceholder('请输入邮箱')
+   - page.getByPlaceholder() - 当没有 label 时
+     * page.getByPlaceholder('请输入邮箱')
    
-#    - page.getByTestId() - 如果页面有 data-testid
-#      * page.getByTestId('submit-button')
+   - page.getByTestId() - 如果页面有 data-testid
+     * page.getByTestId('submit-button')
    
    **次优 - 文本定位器（需谨慎）:**
    - page.getByText() - 精确文本匹配
