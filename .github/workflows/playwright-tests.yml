@@ -1,0 +1,197 @@
+# GitHub Actions 工作流
+# Playwright + 通义千问自动化测试
+
+name: Playwright Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # 每天早上 8 点运行（UTC 时间）
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+env:
+  PYTHON_VERSION: '3.9'
+  NODE_VERSION: '18'
+
+jobs:
+  # ============================
+  # 任务1: 生成测试用例
+  # ============================
+  generate-tests:
+    name: 生成测试用例
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install openai
+
+      - name: 🤖 生成测试代码
+        env:
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+        run: |
+          python3 run_demo.py
+          echo "✅ 测试用例生成完成"
+          ls -la tests/generated/
+
+      - name: 📤 上传生成的测试
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-tests
+          path: tests/generated/
+          retention-days: 7
+
+  # ============================
+  # 任务2: 运行 Playwright 测试
+  # ============================
+  test-chromium:
+    name: 测试（Chromium）
+    runs-on: ubuntu-latest
+    needs: generate-tests
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📥 下载生成的测试
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-tests
+          path: tests/generated/
+
+      - name: 🟢 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 安装依赖
+        run: npm ci
+
+      - name: 🎭 安装 Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: 🧪 运行测试
+        run: npx playwright test --project=chromium
+
+      - name: 📤 上传测试报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-chromium
+          path: playwright-report/
+          retention-days: 30
+
+  test-firefox:
+    name: 测试（Firefox）
+    runs-on: ubuntu-latest
+    needs: generate-tests
+    continue-on-error: true
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📥 下载生成的测试
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-tests
+          path: tests/generated/
+
+      - name: 🟢 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 安装依赖
+        run: npm ci
+
+      - name: 🎭 安装 Playwright
+        run: npx playwright install --with-deps firefox
+
+      - name: 🧪 运行测试
+        run: npx playwright test --project=firefox
+
+      - name: 📤 上传测试报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-firefox
+          path: playwright-report/
+          retention-days: 30
+
+  test-webkit:
+    name: 测试（WebKit）
+    runs-on: ubuntu-latest
+    needs: generate-tests
+    continue-on-error: true
+    steps:
+      - name: 📥 检出代码
+        uses: actions/checkout@v4
+
+      - name: 📥 下载生成的测试
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-tests
+          path: tests/generated/
+
+      - name: 🟢 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: 📦 安装依赖
+        run: npm ci
+
+      - name: 🎭 安装 Playwright
+        run: npx playwright install --with-deps webkit
+
+      - name: 🧪 运行测试
+        run: npx playwright test --project=webkit
+
+      - name: 📤 上传测试报告
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-webkit
+          path: playwright-report/
+          retention-days: 30
+
+  # ============================
+  # 任务3: 发布测试报告
+  # ============================
+  publish-report:
+    name: 发布测试报告
+    runs-on: ubuntu-latest
+    needs: [test-chromium, test-firefox, test-webkit]
+    if: always()
+    steps:
+      - name: 📥 下载所有报告
+        uses: actions/download-artifact@v4
+        with:
+          pattern: playwright-report-*
+          path: all-reports/
+
+      - name: 📊 发布报告到 GitHub Pages（可选）
+        run: |
+          echo "TODO: 配置 GitHub Pages 发布"
+          ls -la all-reports/
+
+      - name: 💬 评论 PR（可选）
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "TODO: 在 PR 中评论测试结果"
+

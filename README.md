@@ -8,117 +8,52 @@
 1.  **Cypress结合 agent**，自然语言输出的结果每次都不同，不稳定，运行较慢。
 2.  用**传统的自动化测试方案**，需要写大量的测试用例，投入产出比可能不成正比。
 
-于是，我准备尝试 **Playwright**+agent 集成 devops 的方案实现自动化测试，使用Playwright进行传统e2e测试，使用MCP 或 agent 生成测试用例，devops 编译完执行测试，这样可以稳定低成本的实现项目的自动化测试。
-
----
-
-## 📊 方案架构 - 传统测试与智能辅助混合策略
+于是，我准备尝试 **Playwright**+agent 集成 devops 的方案实现自动化测试，使用Playwright进行传统e2e测试，使用MCP 或 agent 生成测试用例，devops 编译完执行测试，这样可以稳定低成本的实现项目的自动化测试。策略如下：
 
 ```mermaid
-%%{init: {'theme':'dark', 'themeVariables': { 'primaryColor':'#667eea','primaryTextColor':'#fff','primaryBorderColor':'#fff','lineColor':'#64b5f6','secondaryColor':'#9c27b0','tertiaryColor':'#4caf50','fontSize':'16px'}}}%%
-graph TB
-    subgraph 开发阶段
-        A[开发新功能/修改代码] --> B[提交代码到 Git]
-    end
-    
-    subgraph AI辅助生成
-        B --> C[AI 分析页面结构]
-        C --> D[生成测试用例框架]
-        D --> E{人工审核}
-        E -->|需要调整| D
-        E -->|通过| F[保存测试用例]
-    end
-    
-    subgraph 执行测试
-        F --> G[CI/CD 触发]
-        G --> H[Playwright 执行测试]
-        H --> I{测试结果}
-        I -->|失败| J[生成错误报告]
-        I -->|成功| K[部署上线]
-        J --> L[开发修复 Bug]
-        L --> B
-    end
-    
-    style C fill:#667eea,stroke:#fff,color:#fff
-    style D fill:#667eea,stroke:#fff,color:#fff
-    style E fill:#ffa726,stroke:#fff,color:#fff
-    style H fill:#4caf50,stroke:#fff,color:#fff
-    style I fill:#f44336,stroke:#fff,color:#fff
+flowchart TD
+    A[前端自动化测试] -->B(Python 脚本)
+    B --> C(PlayWright)
+    C --> E[AI辅助生成测试代码]
+    E -->|审核| F[测试集]
+    C --> G[测试集]
+    G --> |test|H[无头浏览器]
+    F --> |test|H
+    H --> 测试结果
 ```
 
-### 核心思路
+AI 生成 + 人工审核
+- AI 生成初始版本
+- 人工审核并加固
+- 建立测试模板库
 
-**关键点：AI 只负责生成，不负责执行**
-- ✅ 执行环节用传统方式（Playwright），保证稳定性
-- ✅ 生成环节用 AI 辅助，降低编写成本
-- ✅ 人工审核把关，确保测试质量
+## 🚀 快速开始
 
----
+### 前置条件
 
-## 🎯 两种测试生成方式
+- Python 3.8+
+- Node.js 16+
+- [通义千问 API Key](https://dashscope.aliyun.com/) （新用户有免费额度）
 
-本项目提供两种互补的测试生成方案:
+### 安装步骤
 
-### 🔹 方式一: 静态分析生成 (`run_demo.py` + `test_generator.py`)
+```bash
+# 1. 克隆/下载项目
+cd playwright-qwen-demo
 
-**适用场景**: 批量分析现有页面,快速生成测试框架
+# 2. 安装 Python 依赖
+pip install openai
 
-```python
-# 扫描 dist 目录中的 HTML 文件
-python run_demo.py
+# 3. 设置 API Key （替换成你的）
+export DASHSCOPE_API_KEY='sk-your-api-key-here'
 
-# 工作流程:
-# 1. 读取 HTML 文件 → 2. AI 分析页面结构 → 3. 生成测试代码
+# 4. 安装 Node.js 依赖
+npm install
+
+python3 qwen_with_playwright_mcp.py
+
+npm run test
 ```
-
-**优势**:
-- ✅ 简单快速,无需启动浏览器
-- ✅ 适合批量处理多个页面
-- ✅ 成本低,只需 2-3 次 API 调用
-
-**限制**:
-- ⚠️ 只能分析静态 HTML,无法测试动态交互
-- ⚠️ 无法获取实时页面状态
-
----
-
-### 🔹 方式二: MCP 实时交互生成 (`qwen_with_playwright_mcp.py`)
-
-**适用场景**: 复杂 Web 应用,需要真实浏览器交互
-
-```python
-# 使用 MCP 集成,AI 实时操作浏览器
-python qwen_with_playwright_mcp.py
-
-# 工作流程:
-# 1. 启动 Playwright MCP Server
-# 2. AI 通过 MCP 工具控制浏览器 (导航、点击、填充等)
-# 3. 基于实时反馈生成测试代码
-```
-
-**优势**:
-- ✅ 真实浏览器环境,能测试复杂交互
-- ✅ AI 可以探索页面,自动发现测试点
-- ✅ 支持动态内容和 SPA 应用
-
-**特性**:
-- 🔧 多轮对话,AI 自主调用浏览器工具
-- 🔧 错误处理和超时机制
-- 🔧 自动转换 ES6 import 语法
-
----
-
-### 📊 两种方式对比
-
-| 维度 | 静态分析 (run_demo.py) | MCP 实时交互 (qwen_with_playwright_mcp.py) |
-|------|----------------------|----------------------------------------|
-| **复杂度** | ⭐ 简单 | ⭐⭐⭐ 中等 |
-| **成本** | 💰 低 (2-3次API) | 💰💰 中 (5-15次API + 工具调用) |
-| **准确性** | ⭐⭐⭐ 静态结构准确 | ⭐⭐⭐⭐⭐ 动态交互准确 |
-| **适用页面** | 静态页面、表单 | 复杂 SPA、动态内容 |
-| **速度** | ⚡ 快 (~10秒) | 🐌 较慢 (~30-60秒) |
-
----
 
 ## 🎯 三大核心组件
 
@@ -285,83 +220,89 @@ await expect(page.getByTestId('success')).toContainText('登录成功');
 
 ---
 
-## 🚀 快速开始
+## 🆕 最新改进（v2.0）
 
-### 前置条件
+### ✨ 核心改进
 
-- Python 3.8+
-- Node.js 16+
-- [通义千问 API Key](https://dashscope.aliyun.com/) （新用户有免费额度）
+我们对项目进行了全面重构，显著提升了稳定性、可维护性和测试质量：
 
-### 安装步骤
+#### 1️⃣ **稳定性提升** 🎯
 
-```bash
-# 1. 克隆/下载项目
-cd playwright-qwen-demo
+- **降低 AI 温度：** 从 0.3 降至 0.1，输出更稳定
+- **模板引导：** 新增 3 个标准模板，引导 AI 生成规范代码
+- **代码验证：** 自动质量评分系统，减少人工审核工作量
+- **智能重试：** 质量不达标时自动重新生成
 
-# 2. 安装 Python 依赖
-pip install openai
+#### 2️⃣ **代码质量保障** 📊
 
-# 3. 设置 API Key （替换成你的）
-export DASHSCOPE_API_KEY='sk-your-api-key-here'
-
-# 4. 安装 Node.js 依赖
-npm install
-
-# 5. 方式一: 运行基础 Demo (静态分析)
-python run_demo.py
-
-# 或 方式二: 运行 MCP 增强版 (实时交互)
-python qwen_with_playwright_mcp.py
-
-# 6. 执行生成的测试
-npx playwright test tests/generated/markdown_editor.spec.js --headed
+```mermaid
+%%{init: {'theme':'dark', 'themeVariables': {'primaryColor':'#667eea','primaryTextColor':'#fff','lineColor':'#64b5f6','secondaryColor':'#26a69a','tertiaryColor':'#1e1e1e','mainBkg':'#1e1e1e','textColor':'#fff','fontSize':'16px','fontFamily':'Arial'}}}%%
+flowchart LR
+    A[AI 生成代码] --> B[自动验证]
+    B --> C{质量评分}
+    C -->|>=90分| D[✅ 优秀]
+    C -->|70-89分| E[⚠️ 良好]
+    C -->|<70分| F[❌ 需改进]
+    F --> G[自动重新生成]
+    G --> B
+    D --> H[保存测试文件]
+    E --> H
+    
+    style D fill:#4caf50,stroke:#fff,stroke-width:2px,color:#fff
+    style E fill:#ff9800,stroke:#fff,stroke-width:2px,color:#fff
+    style F fill:#f44336,stroke:#fff,stroke-width:2px,color:#fff
 ```
 
-### 预期输出
+**自动检查项：**
+- ✅ ES6 import 语法检查
+- ✅ 选择器稳定性分析
+- ✅ 断言充分性验证
+- ✅ POM 模式合规性
+- ✅ 测试结构完整性
 
-**方式一 (run_demo.py) 输出:**
+#### 3️⃣ **模块化架构** 🏗️
+
+重构后的项目结构更清晰，易于维护和扩展：
+
+```python
+# 统一配置管理
+from config import config
+config.AI_TEMPERATURE_STABLE  # 0.1
+
+# 公共函数复用
+from utils.common import (
+    clean_generated_code,
+    validate_test_code
+)
+
+# 代码质量验证
+from utils.code_validator import CodeValidator
+validator = CodeValidator()
+result = validator.validate(code)  # 返回质量评分
 ```
-============================================================
-🤖 Playwright + 通义千问 自动化测试 Demo
-============================================================
 
-📂 步骤 1: 扫描 dist 目录中的 HTML 文件...
-   ✅ 找到 1 个 HTML 文件:
-   1. dist/index.html (123456 bytes)
-   📌 将分析: dist/index.html
+#### 4️⃣ **测试模板库** 📚
 
-🔍 步骤 2: 使用 AI 分析页面结构...
-   ✅ 分析完成:
-   - 发现 15 个可测试元素
-   - 建议 8 个测试动作
+提供 3 个标准模板，引导 AI 生成更规范的代码：
 
-🎯 步骤 3: 生成 Playwright 测试代码...
-   ✅ 测试代码已生成并保存到 generated_test.spec.js
-```
+- **basic_test_template.js** - 基础测试结构
+- **form_test_template.js** - 表单提交场景
+- **navigation_test_template.js** - 页面导航场景
 
-**方式二 (qwen_with_playwright_mcp.py) 输出:**
-```
-============================================================
-🎯 Playwright MCP 测试生成器（增强版）
-============================================================
-2024-11-17 10:30:15 - INFO - 正在启动 Playwright MCP Server...
-2024-11-17 10:30:17 - INFO - ✅ MCP Server 启动成功
-2024-11-17 10:30:17 - INFO - 🚀 开始生成测试: 测试 Markdown 编辑器的基本功能
-2024-11-17 10:30:17 - INFO - 📍 第 1 轮对话
-2024-11-17 10:30:18 - INFO - 🔧 AI 请求调用 2 个工具
-2024-11-17 10:30:18 - INFO - 🔧 调用工具: browser_navigate({'url': 'http://localhost:3000/'})
-2024-11-17 10:30:19 - INFO - ✅ 工具调用成功
-2024-11-17 10:30:19 - INFO - 🔧 调用工具: browser_snapshot({})
-2024-11-17 10:30:20 - INFO - ✅ 工具调用成功
-2024-11-17 10:30:20 - INFO - 📍 第 2 轮对话
-2024-11-17 10:30:25 - INFO - ✅ AI 完成测试生成
-============================================================
-📄 生成的测试代码:
-============================================================
-import { test, expect } from '@playwright/test';
-...
-```
+模板自动匹配场景关键词，无需手动选择。
+
+#### 5️⃣ **CI/CD 开箱即用** 🚀
+
+提供完整的配置文件：
+
+- `.gitlab-ci.yml` - GitLab CI/CD（5个阶段）
+- `.github/workflows/playwright-tests.yml` - GitHub Actions（3个任务）
+
+支持：
+- 自动生成测试用例
+- 多浏览器并行测试（Chromium、Firefox、WebKit）
+- 测试报告归档
+- 失败通知
 
 ---
 
@@ -369,19 +310,27 @@ import { test, expect } from '@playwright/test';
 
 ```
 playwright-qwen-demo/
+├── config.py                          # 🔧 统一配置管理（新增）
 ├── run_demo.py                        # 🎯 基础版: 静态 HTML 分析生成测试
 ├── qwen_with_playwright_mcp.py        # 🚀 增强版: MCP 实时交互生成测试
-├── test_generator.py                  # 🤖 AI 测试生成器核心类
+├── test_generator.py                  # 🤖 AI 测试生成器核心类（已重构）
+├── utils/                             # 🛠️ 工具模块（新增）
+│   ├── common.py                      # 公共函数库
+│   └── code_validator.py              # 代码验证器
+├── tests/
+│   ├── templates/                     # 📚 测试模板库（新增）
+│   │   ├── basic_test_template.js
+│   │   ├── form_test_template.js
+│   │   └── navigation_test_template.js
+│   └── generated/                     # ✅ AI 生成的测试代码
+├── .gitlab-ci.yml                     # 🔄 GitLab CI/CD 配置（新增）
+├── .github/workflows/                 # 🔄 GitHub Actions 配置（新增）
+│   └── playwright-tests.yml
 ├── config.example.json                # 📝 配置示例
-├── config.json                        # 🔑 API Key 配置(需创建)
 ├── requirements.txt                   # 📦 Python 依赖
 ├── package.json                       # 📦 Node.js 依赖
 ├── playwright.config.js               # ⚙️ Playwright 配置
 ├── dist/                              # 🌐 测试页面目录
-│   └── index.html                     # 示例: Markdown 编辑器页面
-├── tests/
-│   └── generated/
-│       └── markdown_editor.spec.js   # ✅ AI 生成的测试代码
 └── doc/
     └── DEVELOPMENT.md                 # 📖 详细开发文档
 ```
@@ -390,159 +339,157 @@ playwright-qwen-demo/
 
 ## 🔗 集成到现有项目
 
-### GitLab CI/CD 示例
+### 快速集成步骤
 
-```yaml
-# .gitlab-ci.yml
-stages:
-  - generate
-  - test
-  - deploy
-
-generate-tests:
-  stage: generate
-  image: python:3.9
-  script:
-    - pip install openai
-    - python scripts/generate_tests.py
-  artifacts:
-    paths:
-      - tests/generated/
-  only:
-    - merge_requests
-
-run-playwright-tests:
-  stage: test
-  image: mcr.microsoft.com/playwright:v1.40.0
-  needs: ["generate-tests"]
-  script:
-    - npm ci
-    - npx playwright test
-  artifacts:
-    when: always
-    paths:
-      - playwright-report/
-
-deploy:
-  stage: deploy
-  script:
-    - echo "部署到生产环境"
-  only:
-    - main
-  when: manual
-```
-
----
-
-## 📚 实际示例
-
-### 示例 1: 生成的测试代码片段
-
-本项目已生成的真实测试代码 (`tests/generated/markdown_editor.spec.js`):
-
-```javascript
-import { test, expect } from '@playwright/test';
-
-test.describe('Markdown 编辑器功能测试', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('http://localhost:3000/');
-    await expect(page).toHaveTitle('Markdown 渲染器');
-  });
-
-  test('应正确显示初始界面元素', async ({ page }) => {
-    // 检查目录区域
-    await expect(page.getByRole('heading', { level: 2, name: '目录' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '新建文件' })).toBeVisible();
-    
-    // 检查编辑区域
-    const textarea = page.getByRole('textbox', { name: '在这里输入 Markdown 文本...' });
-    await expect(textarea).toBeVisible();
-    
-    // 检查预览区域
-    await expect(page.getByRole('heading', { level: 2, name: '渲染预览' })).toBeVisible();
-  });
-
-  test('应支持基本的 Markdown 编辑功能', async ({ page }) => {
-    const textarea = page.getByRole('textbox');
-    await textarea.fill('# 测试标题\n\n这是测试内容');
-    
-    const preview = page.locator('[data-testid="preview-content"]');
-    await expect(preview.getByRole('heading', { level: 1, name: '测试标题' })).toBeVisible();
-  });
-});
-```
-
-**亮点**:
-- ✅ 使用 `getByRole`、`getByTestId` 等稳定选择器
-- ✅ 包含 `beforeEach` 减少重复代码
-- ✅ 断言充分,覆盖可见性和内容
-- ✅ 测试用例名称清晰易懂
-
----
-
-### 示例 2: 测试执行结果
-
-运行测试后的实际输出:
+#### 1️⃣ 复制核心文件到你的项目
 
 ```bash
-$ npx playwright test tests/generated/markdown_editor.spec.js
+# 复制核心模块
+cp config.py your-project/
+cp -r utils/ your-project/
+cp -r tests/templates/ your-project/tests/
 
-Running 5 tests using 1 worker
+# 复制 CI/CD 配置（根据你使用的平台选择）
+cp .gitlab-ci.yml your-project/           # GitLab
+cp -r .github/ your-project/              # GitHub
+```
 
-  ✓ Markdown 编辑器功能测试 › 应正确显示初始界面元素 (1.2s)
-  ✓ Markdown 编辑器功能测试 › 应正确渲染默认的 Markdown 内容 (890ms)
-  ✓ Markdown 编辑器功能测试 › 应支持基本的 Markdown 编辑功能 (750ms)
-  ✓ Markdown 编辑器功能测试 › 应正确处理图片和引用 (680ms)
-  ✓ Markdown 编辑器功能测试 › 应支持表格渲染 (720ms)
+#### 2️⃣ 安装依赖
 
-  5 passed (4.2s)
+```bash
+pip install openai
+npm install @playwright/test
+```
+
+#### 3️⃣ 配置 API Key
+
+```bash
+# 方式1: 环境变量
+export DASHSCOPE_API_KEY='your-api-key'
+
+# 方式2: config.json
+echo '{"api_key": "your-api-key"}' > config.json
+```
+
+#### 4️⃣ 生成测试用例
+
+```python
+from test_generator import TestGenerator
+
+generator = TestGenerator()
+result = generator.generate_test(
+    page_description="你的页面描述",
+    scenario="表单提交测试",
+    validate=True  # 自动验证代码质量
+)
+
+print(f"代码质量评分: {result['validation']['score']}/100")
+print(result['code'])
+```
+
+### GitLab CI/CD 完整配置
+
+项目已包含完整的 `.gitlab-ci.yml` 配置文件，包含以下阶段：
+
+1. **setup** - 环境准备
+2. **generate** - AI 生成测试用例
+3. **test** - 多浏览器并行测试
+4. **report** - 生成测试报告
+5. **deploy** - 部署到生产/预发布
+
+```bash
+# 使用方式：直接提交代码即可自动运行
+git add .
+git commit -m "feat: 添加自动化测试"
+git push origin main
+```
+
+### GitHub Actions 完整配置
+
+项目已包含 `.github/workflows/playwright-tests.yml` 配置文件，支持：
+
+- 定时运行（每天早上8点）
+- Pull Request 自动测试
+- 手动触发
+
+```bash
+# 查看运行状态
+# 访问: https://github.com/your-repo/actions
+```
+
+### 自定义配置
+
+编辑 `config.py` 调整参数：
+
+```python
+class Config:
+    # AI 模型配置
+    AI_MODEL = "qwen-plus-latest"
+    AI_TEMPERATURE_STABLE = 0.1  # 更低=更稳定
+    
+    # MCP 配置
+    MCP_MAX_ITERATIONS = 15
+    MCP_TIMEOUT = 30
+    
+    # 本地服务器配置
+    LOCAL_SERVER_PORT_RANGE = (8000, 9000)
 ```
 
 ---
 
-### 示例 3: MCP 工作流程日志
+## ❓ 常见问题
 
-使用 `qwen_with_playwright_mcp.py` 时的详细日志:
+### Q1: 为什么生成的代码质量评分低？
 
-```
-2024-11-17 10:30:15 - INFO - 正在启动 Playwright MCP Server...
-2024-11-17 10:30:17 - INFO - ✅ MCP Server 启动成功
-2024-11-17 10:30:17 - INFO - 🚀 开始生成测试: 测试 Markdown 编辑器的基本功能
+**A:** 可能原因：
+1. 页面描述不够详细 → 提供更完整的页面结构和交互说明
+2. 温度设置过高 → 检查 `config.py` 中的 `AI_TEMPERATURE_STABLE`（应为 0.1）
+3. 未使用模板 → 确保 `TestGenerator(use_templates=True)`
 
-📍 第 1 轮对话
-2024-11-17 10:30:18 - INFO - 🔧 AI 请求调用 2 个工具
-2024-11-17 10:30:18 - INFO - 🔧 调用工具: browser_navigate({'url': 'http://localhost:3000/'})
-2024-11-17 10:30:19 - INFO - ✅ 工具调用成功
-2024-11-17 10:30:19 - INFO - 🔧 调用工具: browser_snapshot({})
-2024-11-17 10:30:20 - INFO - ✅ 工具调用成功
+### Q2: CI/CD 中 AI 生成失败怎么办？
 
-📍 第 2 轮对话
-2024-11-17 10:30:21 - INFO - 🔧 AI 请求调用 3 个工具
-2024-11-17 10:30:21 - INFO - 🔧 调用工具: browser_fill({'selector': 'textarea', 'value': '# 测试'})
-2024-11-17 10:30:22 - INFO - ✅ 工具调用成功
-2024-11-17 10:30:22 - INFO - 🔧 调用工具: browser_click({'selector': 'button[name="复制"]'})
-2024-11-17 10:30:23 - INFO - ✅ 工具调用成功
+**A:** 解决方案：
+1. 检查 API Key 是否正确配置在 CI 环境变量中
+2. 启用重试机制（已在 `.gitlab-ci.yml` 中配置 `retry: 2`）
+3. 设置 `allow_failure: true` 允许 AI 生成失败但不阻塞测试
 
-📍 第 3 轮对话
-2024-11-17 10:30:25 - INFO - ✅ AI 完成测试生成
-2024-11-17 10:30:25 - INFO - 📝 提取了 markdown 格式的代码
-2024-11-17 10:30:25 - INFO - ✨ 已将 require 转换为 import 语法
-```
+### Q3: 如何提高生成速度？
+
+**A:** 优化建议：
+1. 使用缓存机制（相同输入返回缓存结果）
+2. 减少模板长度（只保留核心示例）
+3. 降低 `max_retries` 参数
+
+### Q4: 生成的选择器不稳定怎么办？
+
+**A:** 改进方法：
+1. 在 HTML 中添加 `data-testid` 属性
+2. 使用语义化的 `role` 和 `aria-label`
+3. 代码验证器会自动提示不稳定选择器，人工审核时修正
+
+### Q5: 修改了 HTML 但生成的测试还是用旧版本？
+
+**A:** 已修复！v2.0.1 版本后，本地服务器会自动禁用浏览器缓存：
+- 服务器响应头包含 `Cache-Control: no-store`
+- 每次都会加载最新的文件
+- 无需手动清除浏览器缓存
+
+如果仍有问题，可以：
+1. 重启生成脚本（退出并重新运行）
+2. 检查是否修改了正确的文件路径
+3. 确认 `config.DIST_DIR` 指向正确的目录
 
 ---
 
-## 📚 进阶使用
+## 🤝 贡献指南
 
-详细的使用指南、API 文档、集成方案请查看：
+欢迎提交 Issue 和 Pull Request！
 
-👉 **[DEVELOPMENT.md](./doc/DEVELOPMENT.md)**
-
-包含：
-- 完整的 API 使用说明 (TestGenerator、PlaywrightMCPClient)
-- MCP 集成详解和多轮对话机制
-- CI/CD 集成方案 (GitLab、GitHub Actions)
-- 故障排除和性能优化
-- 常见问题解答
+改进建议方向：
+1. 新增更多测试模板（如登录、注册、支付等）
+2. 支持更多 AI 模型（OpenAI GPT-4、Claude 等）
+3. 增强代码验证规则
+4. 优化提示词工程
 
 ---
 
@@ -557,3 +504,42 @@ MIT License
 - [Playwright 官方文档](https://playwright.dev/)
 - [通义千问 API 文档](https://help.aliyun.com/zh/dashscope/)
 - [OpenAI Python SDK](https://github.com/openai/openai-python)
+- [GitLab CI/CD 文档](https://docs.gitlab.com/ee/ci/)
+- [GitHub Actions 文档](https://docs.github.com/actions)
+
+---
+
+## 📝 更新日志
+
+### v2.0.1 (2024-11-18)
+
+**Bug 修复：**
+- 🐛 修复本地 HTTP 服务器资源泄漏问题
+  - 多次调用 `generate_test_from_url` 时会复用已有服务器
+  - 相同目录不会重复启动服务器
+  - 不同目录会先关闭旧服务器再启动新的
+  - Context manager 退出时确保资源完全清理
+- 🐛 修复浏览器缓存导致的旧版本问题
+  - 本地服务器添加 `Cache-Control: no-store` 响应头
+  - 确保每次都加载最新的 HTML/JS/CSS 文件
+- 🔧 所有路径统一使用配置管理（不再硬编码）
+- 📚 清理 README 中的静态统计数据
+
+### v2.0.0 (2024-11-18)
+
+**主要改进：**
+- ✨ 新增统一配置管理系统
+- ✨ 新增测试模板库（3个标准模板）
+- ✨ 新增代码质量自动验证
+- ✨ 新增公共函数库（减少重复代码）
+- ✨ 新增完整的 CI/CD 配置
+- 🔧 重构 `test_generator.py`（降低温度到 0.1）
+- 🔧 重构 `qwen_with_playwright_mcp.py`（集成验证器）
+- 📚 更新 README 文档
+
+### v1.0.0 (2024-09-01)
+
+**初始版本：**
+- 基础 AI 测试生成功能
+- Playwright MCP 集成
+- 基础 HTML 分析

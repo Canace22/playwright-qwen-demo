@@ -1,0 +1,222 @@
+# GitLab CI/CD 配置
+# Playwright + 通义千问自动化测试流程
+
+stages:
+  - setup
+  - generate
+  - test
+  - report
+  - deploy
+
+variables:
+  # Python 版本
+  PYTHON_VERSION: "3.9"
+  # Node.js 版本
+  NODE_VERSION: "18"
+  # Playwright 版本
+  PLAYWRIGHT_VERSION: "v1.40.0"
+  # 测试超时时间（秒）
+  TEST_TIMEOUT: "300"
+
+# ============================
+# 阶段1: 环境准备
+# ============================
+setup:dependencies:
+  stage: setup
+  image: python:${PYTHON_VERSION}
+  script:
+    - echo "📦 安装 Python 依赖..."
+    - pip install --upgrade pip
+    - pip install openai
+    - pip install -r requirements.txt || echo "requirements.txt 不存在或安装失败"
+  cache:
+    paths:
+      - .pip-cache/
+  artifacts:
+    expire_in: 1 hour
+    paths:
+      - .pip-cache/
+  only:
+    - merge_requests
+    - main
+    - develop
+
+# ============================
+# 阶段2: 生成测试用例
+# ============================
+generate:tests:
+  stage: generate
+  image: python:${PYTHON_VERSION}
+  needs: ["setup:dependencies"]
+  script:
+    - echo "🤖 使用 AI 生成测试用例..."
+    - pip install openai
+    
+    # 方式1: 使用基础生成器
+    - python3 run_demo.py || echo "基础生成器运行失败"
+    
+    # 方式2: 使用 MCP 增强版（需要 Node.js）
+    # - apt-get update && apt-get install -y nodejs npm
+    # - python3 qwen_with_playwright_mcp.py
+    
+    - echo "✅ 测试用例生成完成"
+    - ls -la tests/generated/
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - tests/generated/
+  only:
+    - merge_requests
+    - main
+    - develop
+  # 允许失败（如果 AI 生成失败，不阻塞后续流程）
+  allow_failure: false
+  retry:
+    max: 2
+    when:
+      - api_failure
+      - runner_system_failure
+
+# ============================
+# 阶段3: 执行测试
+# ============================
+test:playwright:chromium:
+  stage: test
+  image: mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+  needs: ["generate:tests"]
+  script:
+    - echo "🚀 运行 Playwright 测试（Chromium）..."
+    - npm ci
+    - npx playwright install chromium
+    - npx playwright test --project=chromium --timeout=${TEST_TIMEOUT}000
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - playwright-report/
+      - test-results/
+    reports:
+      junit: test-results/junit.xml
+  only:
+    - merge_requests
+    - main
+    - develop
+
+test:playwright:firefox:
+  stage: test
+  image: mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+  needs: ["generate:tests"]
+  script:
+    - echo "🦊 运行 Playwright 测试（Firefox）..."
+    - npm ci
+    - npx playwright install firefox
+    - npx playwright test --project=firefox --timeout=${TEST_TIMEOUT}000
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - playwright-report/
+      - test-results/
+  only:
+    - merge_requests
+    - main
+  allow_failure: true
+
+test:playwright:webkit:
+  stage: test
+  image: mcr.microsoft.com/playwright:${PLAYWRIGHT_VERSION}
+  needs: ["generate:tests"]
+  script:
+    - echo "🍎 运行 Playwright 测试（WebKit）..."
+    - npm ci
+    - npx playwright install webkit
+    - npx playwright test --project=webkit --timeout=${TEST_TIMEOUT}000
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - playwright-report/
+      - test-results/
+  only:
+    - main
+  allow_failure: true
+
+# ============================
+# 阶段4: 测试报告
+# ============================
+report:generate:
+  stage: report
+  image: node:${NODE_VERSION}
+  needs:
+    - test:playwright:chromium
+    - test:playwright:firefox
+    - test:playwright:webkit
+  script:
+    - echo "📊 生成测试报告..."
+    - npm ci
+    - npx playwright show-report || echo "无法显示报告（CI 环境）"
+    - echo "✅ 测试报告已生成: playwright-report/"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - playwright-report/
+  only:
+    - merge_requests
+    - main
+
+# ============================
+# 阶段5: 部署（可选）
+# ============================
+deploy:production:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - echo "🚀 部署到生产环境..."
+    - echo "TODO: 添加部署脚本"
+    # 示例: scp、rsync、kubectl apply 等
+  only:
+    - main
+  when: manual  # 手动触发
+  environment:
+    name: production
+    url: https://your-production-url.com
+
+deploy:staging:
+  stage: deploy
+  image: alpine:latest
+  script:
+    - echo "🧪 部署到预发布环境..."
+    - echo "TODO: 添加部署脚本"
+  only:
+    - develop
+  when: manual
+  environment:
+    name: staging
+    url: https://your-staging-url.com
+
+# ============================
+# 通知（可选）
+# ============================
+notify:success:
+  stage: .post
+  image: alpine:latest
+  script:
+    - echo "✅ CI/CD 流程执行成功！"
+    - echo "TODO: 添加通知脚本（钉钉、企业微信、Slack 等）"
+  when: on_success
+  only:
+    - main
+    - develop
+
+notify:failure:
+  stage: .post
+  image: alpine:latest
+  script:
+    - echo "❌ CI/CD 流程执行失败！"
+    - echo "TODO: 添加失败通知"
+  when: on_failure
+  only:
+    - main
+    - develop
+

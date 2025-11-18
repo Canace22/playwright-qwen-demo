@@ -1,24 +1,25 @@
-import os
+from pathlib import Path
 from test_generator import TestGenerator
+from config import config
 
 def find_html_files_in_dist():
     """扫描 dist 目录，查找所有 HTML 文件"""
-    dist_dir = "dist"
+    dist_dir = config.DIST_DIR
     
-    if not os.path.exists(dist_dir):
-        return None, f"❌ dist 目录不存在，请先创建 dist 目录并放入要测试的 HTML 文件"
+    if not dist_dir.exists():
+        return None, f"❌ {dist_dir} 目录不存在，请先创建目录并放入要测试的 HTML 文件"
     
-    if not os.path.isdir(dist_dir):
-        return None, f"❌ dist 不是一个目录"
+    if not dist_dir.is_dir():
+        return None, f"❌ {dist_dir} 不是一个目录"
     
     html_files = [
-        os.path.join(dist_dir, name) 
-        for name in os.listdir(dist_dir) 
-        if name.lower().endswith((".html", ".htm"))
+        file_path
+        for file_path in dist_dir.iterdir()
+        if file_path.suffix.lower() in ('.html', '.htm')
     ]
     
     if not html_files:
-        return None, f"❌ 在 dist 目录下未找到任何 HTML 文件，请添加要测试的页面文件"
+        return None, f"❌ 在 {dist_dir} 目录下未找到任何 HTML 文件，请添加要测试的页面文件"
     
     return html_files, None
 
@@ -29,8 +30,9 @@ def main():
     print()
     
     # 检查 API Key
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
+    try:
+        api_key = config.api_key
+    except ValueError:
         print("❌ 错误: 请先设置环境变量 DASHSCOPE_API_KEY")
         print("   export DASHSCOPE_API_KEY='your-api-key'")
         print()
@@ -52,7 +54,7 @@ def main():
     
     print(f"   ✅ 找到 {len(html_files)} 个 HTML 文件:")
     for i, file_path in enumerate(html_files, 1):
-        file_size = os.path.getsize(file_path)
+        file_size = file_path.stat().st_size
         print(f"   {i}. {file_path} ({file_size} bytes)")
     print()
     
@@ -66,8 +68,7 @@ def main():
     generator = TestGenerator()
     
     try:
-        with open(target_html_path, "r", encoding="utf-8") as f:
-            html_for_analysis = f.read()
+        html_for_analysis = target_html_path.read_text(encoding="utf-8")
         
         analysis = generator.analyze_page_html(html_for_analysis)
         print("   ✅ 分析完成:")
@@ -97,13 +98,20 @@ def main():
 """
     
     try:
-        test_code = generator.generate_test(page_desc)
+        result = generator.generate_test(page_desc, validate=True)
+        test_code = result['code']
         
-        # 保存生成的测试代码
-        with open("generated_test.spec.js", "w", encoding="utf-8") as f:
-            f.write(test_code)
+        # 保存生成的测试代码（使用配置路径）
+        output_file = config.GENERATED_DIR / "generated_test.spec.js"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text(test_code, encoding=config.TEST_FILE_ENCODING)
         
-        print("   ✅ 测试代码已生成并保存到 generated_test.spec.js")
+        print(f"   ✅ 测试代码已生成并保存到 {output_file}")
+        
+        # 显示质量评分
+        if result.get('validation'):
+            validation = result['validation']
+            print(f"   📊 代码质量评分: {validation['score']}/100")
         print()
         print("=" * 60)
         print("生成的测试代码预览:")
@@ -121,7 +129,7 @@ def main():
     print()
     print("📋 生成的文件:")
     print(f"   1. {target_html_path}       - 被分析的页面")
-    print("   2. generated_test.spec.js   - AI 生成的测试代码")
+    print(f"   2. {output_file}             - AI 生成的测试代码")
     print("   3. playwright.config.js     - Playwright 配置文件")
     print()
     print("🚀 后续步骤:")
@@ -131,15 +139,14 @@ def main():
     print("      npx playwright install")
     print()
     print("   2. 运行测试:")
-    print("      npx playwright test generated_test.spec.js")
+    print(f"      npx playwright test {output_file}")
     print()
     print("   3. 查看测试报告:")
     print("      npx playwright show-report")
     print()
     
     # 生成 playwright 配置（使用实际分析的 HTML 文件路径）
-    html_filename = os.path.basename(target_html_path)
-    config = f"""// playwright.config.js
+    playwright_config = f"""// playwright.config.js
 import {{ defineConfig }} from '@playwright/test';
 
 export default defineConfig({{
@@ -152,8 +159,8 @@ export default defineConfig({{
   }},
 }});"""
     
-    with open("playwright.config.js", "w") as f:
-        f.write(config)
+    config_file = Path("playwright.config.js")
+    config_file.write_text(playwright_config, encoding='utf-8')
     
     print("   ✅ 已自动生成 playwright.config.js")
     print()

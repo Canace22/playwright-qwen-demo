@@ -2,37 +2,50 @@ import os
 import json
 import subprocess
 import time
-import re
-import logging
 import threading
 import http.server
 import socketserver
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
-from openai import OpenAI
+
+# 导入公共模块
+from config import config
+from utils.common import (
+    create_openai_client,
+    clean_generated_code,
+    setup_logger,
+    save_test_file
+)
+from utils.code_validator import validate_test_code
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 class PlaywrightMCPClient:
     """通义千问 + Playwright MCP 集成客户端（增强版）"""
     
-    def __init__(self, max_iterations: int = 10, timeout: int = 30):
+    def __init__(
+        self,
+        max_iterations: Optional[int] = None,
+        timeout: Optional[int] = None,
+        validate_code: bool = True
+    ):
         """
         初始化客户端
         
         Args:
-            max_iterations: 最大工具调用轮数，防止无限循环
-            timeout: 每次 MCP 调用的超时时间（秒）
+            max_iterations: 最大工具调用轮数（None 使用配置默认值）
+            timeout: 每次 MCP 调用的超时时间（秒，None 使用配置默认值）
+            validate_code: 是否验证生成的代码
         """
-        self.max_iterations = max_iterations
-        self.timeout = timeout
+        self.max_iterations = max_iterations or config.MCP_MAX_ITERATIONS
+        self.timeout = timeout or config.MCP_TIMEOUT
+        self.validate_code = validate_code
         self.mcp_process = None
         self.request_id = 0
+        
+        # Cookie 相关
+        self.cookies = []  # 存储要设置的 cookie 列表
         
         # 本地服务器相关
         self.local_server = None
@@ -41,18 +54,17 @@ class PlaywrightMCPClient:
         self.local_server_dir = None
         
         # 初始化 OpenAI 客户端
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            raise ValueError("未设置 DASHSCOPE_API_KEY 环境变量")
-        
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
+        try:
+            self.client = create_openai_client(config.api_key)
+        except ValueError as e:
+            logger.error(f"❌ 初始化失败: {e}")
+            raise
         
         # 启动 Playwright MCP Server
         self._start_mcp_server()
         self.tools = self.get_playwright_tools()
+        
+        logger.info(f"✅ PlaywrightMCPClient 初始化完成（迭代: {self.max_iterations}, 超时: {self.timeout}s）")
     
     def _start_mcp_server(self):
         """启动 MCP Server 并等待其就绪"""
@@ -154,12 +166,41 @@ class PlaywrightMCPClient:
                         "required": ["selector", "value"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "browser_set_cookie",
+                    "description": "设置浏览器 cookie",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Cookie 名称"
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "Cookie 值"
+                            },
+                            "domain": {
+                                "type": "string",
+                                "description": "Cookie 域名（可选）"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Cookie 路径（可选，默认为 /）"
+                            }
+                        },
+                        "required": ["name", "value"]
+                    }
+                }
             }
         ]
     
     def call_mcp_tool(self, tool_name: str, arguments: dict) -> Dict[str, Any]:
         """
-        调用 MCP 工具（增强版：支持错误处理和超时）
+        调用 MCP 工具
         
         Args:
             tool_name: 工具名称
@@ -247,17 +288,25 @@ class PlaywrightMCPClient:
         
         # 创建服务器
         class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-            """静默的 HTTP 处理器（减少日志输出）"""
+            """静默的 HTTP 处理器（减少日志输出，禁用缓存）"""
             def log_message(self, format, *args):
                 pass  # 不输出请求日志
+            
+            def end_headers(self):
+                """添加禁用缓存的响应头"""
+                # 禁用所有缓存，确保每次都获取最新文件
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+                self.send_header('Pragma', 'no-cache')
+                self.send_header('Expires', '0')
+                super().end_headers()
             
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=abs_dir, **kwargs)
         
         # 查找可用端口
         if port == 0:
-            # 从 8000 开始尝试
-            for try_port in range(8000, 9000):
+            # 从配置的端口范围开始尝试
+            for try_port in range(*config.LOCAL_SERVER_PORT_RANGE):
                 try:
                     self.local_server = socketserver.TCPServer(
                         ("127.0.0.1", try_port), 
@@ -269,10 +318,11 @@ class PlaywrightMCPClient:
                     continue
             
             if not self.local_server:
-                raise RuntimeError("无法找到可用端口（8000-8999）")
+                port_range = config.LOCAL_SERVER_PORT_RANGE
+                raise RuntimeError(f"无法找到可用端口（{port_range[0]}-{port_range[1]-1}）")
         else:
             self.local_server = socketserver.TCPServer(
-                ("127.0.0.1", port), 
+                (config.LOCAL_SERVER_HOST, port), 
                 QuietHTTPRequestHandler
             )
         
@@ -290,8 +340,72 @@ class PlaywrightMCPClient:
         # 等待服务器启动
         time.sleep(0.5)
         
-        server_url = f"http://127.0.0.1:{port}"
+        server_url = f"http://{config.LOCAL_SERVER_HOST}:{port}"
         return port, server_url
+    
+    def set_cookies(self, cookies_str: str, domain: Optional[str] = None):
+        """
+        设置要使用的 cookie
+        
+        Args:
+            cookies_str: Cookie 字符串，格式如 "name1=value1; name2=value2"
+            domain: Cookie 域名（可选，如果不提供则从 URL 中提取）
+        """
+        # 解析 cookie 字符串
+        cookie_pairs = [pair.strip() for pair in cookies_str.split(';')]
+        self.cookies = []
+        
+        for pair in cookie_pairs:
+            if '=' in pair:
+                name, value = pair.split('=', 1)
+                name = name.strip()
+                value = value.strip()
+                if name and value:
+                    self.cookies.append({
+                        "name": name,
+                        "value": value,
+                        "domain": domain,
+                        "path": "/"
+                    })
+        
+        logger.info(f"🍪 已设置 {len(self.cookies)} 个 cookie")
+        for cookie in self.cookies:
+            logger.info(f"  - {cookie['name']}={cookie['value'][:50]}...")
+    
+    def _apply_cookies(self, url: str):
+        """
+        应用已设置的 cookie 到浏览器
+        
+        Args:
+            url: 目标 URL（用于提取域名）
+        """
+        if not self.cookies:
+            return
+        
+        # 从 URL 提取域名
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        domain = parsed.netloc or parsed.hostname
+        
+        # 为每个 cookie 设置域名（如果未设置）
+        for cookie in self.cookies:
+            if not cookie.get("domain") and domain:
+                cookie["domain"] = domain
+            
+            # 调用 MCP 工具设置 cookie
+            try:
+                result = self.call_mcp_tool("browser_set_cookie", {
+                    "name": cookie["name"],
+                    "value": cookie["value"],
+                    "domain": cookie.get("domain"),
+                    "path": cookie.get("path", "/")
+                })
+                if "error" not in result:
+                    logger.info(f"✅ Cookie 设置成功: {cookie['name']}")
+                else:
+                    logger.warning(f"⚠️ Cookie 设置失败: {cookie['name']} - {result.get('error')}")
+            except Exception as e:
+                logger.warning(f"⚠️ 设置 Cookie 时出错: {cookie['name']} - {e}")
     
     def _resolve_url(self, url_or_path: str) -> str:
         """
@@ -322,9 +436,26 @@ class PlaywrightMCPClient:
         else:
             raise ValueError(f"路径不存在: {url_or_path}")
         
-        # 启动本地服务器
-        logger.info(f"📂 检测到本地路径，启动服务器...")
-        port, server_url = self._start_local_server(str(directory))
+        # 转换为绝对路径用于比较
+        abs_directory = str(Path(directory).resolve())
+        
+        # 检查是否已经为相同目录启动了服务器
+        if self.local_server and self.local_server_dir == abs_directory:
+            logger.info(f"♻️  复用已有服务器: http://{config.LOCAL_SERVER_HOST}:{self.local_server_port}")
+            server_url = f"http://{config.LOCAL_SERVER_HOST}:{self.local_server_port}"
+        else:
+            # 如果已有服务器但目录不同，先关闭旧的
+            if self.local_server:
+                logger.info("🔄 关闭旧服务器，启动新服务器...")
+                try:
+                    self.local_server.shutdown()
+                    self.local_server.server_close()
+                except Exception as e:
+                    logger.warning(f"⚠️ 关闭旧服务器时出错: {e}")
+            
+            # 启动新的本地服务器
+            logger.info(f"📂 检测到本地路径，启动服务器...")
+            port, server_url = self._start_local_server(abs_directory)
         
         # 构造完整 URL
         full_url = f"{server_url}/{filename}"
@@ -334,7 +465,7 @@ class PlaywrightMCPClient:
     
     def generate_test_from_url(self, url: str, scenario: str) -> str:
         """
-        从 URL 或本地路径生成测试代码（增强版：支持多轮对话 + 本地文件）
+        从 URL 或本地路径生成测试代码
         
         Args:
             url: 要测试的页面 URL 或本地文件路径
@@ -349,6 +480,11 @@ class PlaywrightMCPClient:
         # 解析 URL（自动处理本地路径）
         resolved_url = self._resolve_url(url)
         
+        # 如果有设置的 cookie，先应用它们
+        if self.cookies:
+            logger.info("🍪 正在应用已设置的 cookie...")
+            self._apply_cookies(resolved_url)
+        
         messages = [
             {
                 "role": "system",
@@ -360,13 +496,60 @@ class PlaywrightMCPClient:
 3. 根据需要使用 browser_click、browser_fill 等工具交互
 4. 生成符合 POM 模式的 Playwright 测试代码
 
-要求:
-- 使用 data-testid 或 role 选择器
-- 包含充分的断言
-- 代码清晰易维护
-- 只返回纯 JavaScript 代码，不要包含 markdown 格式
-- **必须使用 ES6 import 语法，不要使用 require**
-- 示例：import { test, expect } from '@playwright/test';
+**关键要求 - 元素查找优化:**
+
+1. **选择器优先级（按稳定性排序）:**
+   - 优先: page.getByTestId('xxx') - 最稳定
+   - 其次: page.getByRole('button', { name: 'xxx' }) - 语义化
+   - 再次: page.getByLabel('xxx') - 表单元素
+   - 最后: page.getByText('xxx') - 文本匹配（需谨慎使用）
+
+2. **等待机制（必须）:**
+   - 所有元素操作前必须等待: await expect(locator).toBeVisible()
+   - 页面加载后等待关键元素: await page.waitForSelector('selector', { state: 'visible' })
+   - 导航后等待: await page.waitForLoadState('networkidle') 或 'domcontentloaded'
+
+3. **处理多个匹配:**
+   - 如果 getByText/getByRole 可能匹配多个元素，使用 .first() 或 .nth(0)
+   - 示例: page.getByText('文本').first() 或 page.getByRole('button').nth(0)
+
+4. **稳定的断言:**
+   - 先检查可见性: await expect(locator).toBeVisible()
+   - 再检查内容: await expect(locator).toContainText('xxx')
+   - 使用 toHaveText() 而不是 toContainText() 如果文本完全匹配
+
+5. **超时配置:**
+   - 在 beforeEach 中设置: test.setTimeout(30000)
+   - 或使用: await expect(locator).toBeVisible({ timeout: 10000 })
+
+6. **代码结构:**
+   - 使用 Page Object Model 模式封装页面元素
+   - 在 beforeEach 中等待页面完全加载
+   - 每个测试用例独立，不依赖其他测试的状态
+
+7. **其他要求:**
+   - 包含充分的断言
+   - 代码清晰易维护
+   - 只返回纯 JavaScript 代码，不要包含 markdown 格式
+   - **必须使用 ES6 import 语法，不要使用 require**
+   - 示例：import { test, expect } from '@playwright/test';
+
+**示例代码模式:**
+```javascript
+test.beforeEach(async ({ page }) => {
+  await page.goto('url');
+  await page.waitForLoadState('networkidle');
+  // 等待关键元素出现
+  await expect(page.getByRole('heading', { name: '标题' })).toBeVisible();
+});
+
+test('测试用例', async ({ page }) => {
+  // 使用稳定的选择器
+  const button = page.getByRole('button', { name: '按钮文本' }).first();
+  await expect(button).toBeVisible();
+  await button.click();
+});
+```
 """
             },
             {
@@ -396,10 +579,10 @@ URL: {resolved_url}
             try:
                 # 调用通义千问
                 response = self.client.chat.completions.create(
-                model="qwen-plus-latest",
+                model=config.AI_MODEL,
                 messages=messages,
                 tools=self.tools,
-                temperature=0.3
+                temperature=config.AI_TEMPERATURE_STABLE  # 使用配置的温度
                 )
         
                 message = response.choices[0].message
@@ -449,9 +632,9 @@ URL: {resolved_url}
                 
                 try:
                     final_response = self.client.chat.completions.create(
-                        model="qwen-plus-latest",
+                        model=config.AI_MODEL,
                         messages=messages,
-                        temperature=0.3
+                        temperature=config.AI_TEMPERATURE_STABLE
                     )
                     return self._extract_code(final_response.choices[0].message.content)
                 except:
@@ -466,9 +649,9 @@ URL: {resolved_url}
         
         try:
             final_response = self.client.chat.completions.create(
-                    model="qwen-plus-latest",
+                    model=config.AI_MODEL,
                     messages=messages,
-                    temperature=0.3
+                    temperature=config.AI_TEMPERATURE_STABLE
             )
             return self._extract_code(final_response.choices[0].message.content)
         except Exception as e:
@@ -477,7 +660,7 @@ URL: {resolved_url}
     
     def _extract_code(self, content: str) -> str:
         """
-        从 AI 回复中提取纯代码（去除 markdown 格式）
+        从 AI 回复中提取并清理代码
         
         Args:
             content: AI 的原始回复
@@ -485,54 +668,23 @@ URL: {resolved_url}
         Returns:
             清理后的代码
         """
-        if not content:
-            return "// 未生成代码"
+        # 使用公共函数清理代码
+        code = clean_generated_code(content)
         
-        # 尝试提取 markdown 代码块
-        code_block_pattern = r"```(?:javascript|js)?\s*\n(.*?)\n```"
-        matches = re.findall(code_block_pattern, content, re.DOTALL)
-        
-        if matches:
-            # 返回第一个代码块
-            logger.info("📝 提取了 markdown 格式的代码")
-            code = matches[0].strip()
-        else:
-            # 没有代码块，返回原始内容
-            logger.info("📝 直接使用原始内容")
-            code = content.strip()
-        
-        # 将 require 语法转换为 import 语法
-        code = self._convert_require_to_import(code)
-        
-        return code
-    
-    def _convert_require_to_import(self, code: str) -> str:
-        """
-        将 CommonJS require 语法转换为 ES6 import 语法
-        
-        Args:
-            code: 原始代码
+        # 如果启用了验证，进行质量检查
+        if self.validate_code:
+            validation_result = validate_test_code(code)
+            logger.info(f"📊 代码质量评分: {validation_result['score']}/100")
             
-        Returns:
-            转换后的代码
-        """
-        def replace_require_with_import(match):
-            """替换函数，用于清理空格"""
-            content = match.group(1).strip()  # 去掉前后空格
-            module = match.group(2)
-            semicolon = match.group(3) if match.lastindex >= 3 else ''
-            return f"import {{ {content} }} from '{module}'{semicolon}"
-        
-        # 匹配 const { a, b } = require('module'); 或 const { a, b } = require('module')
-        pattern1 = r"const\s+\{\s*([^}]+)\s*\}\s*=\s*require\(['\"]([^'\"]+)['\"]\)(;?)"
-        code = re.sub(pattern1, replace_require_with_import, code)
-        
-        # 匹配 const name = require('module'); 或 const name = require('module')
-        pattern2 = r"const\s+(\w+)\s*=\s*require\(['\"]([^'\"]+)['\"]\)(;?)"
-        code = re.sub(pattern2, r"import \1 from '\2'\3", code)
-        
-        if 'import' in code and 'require' not in code:
-            logger.info("✨ 已将 require 转换为 import 语法")
+            if validation_result['errors']:
+                logger.warning("⚠️ 代码存在错误:")
+                for error in validation_result['errors']:
+                    logger.warning(f"  - {error}")
+            
+            if validation_result['warnings']:
+                logger.info("💡 代码改进建议:")
+                for warning in validation_result['warnings']:
+                    logger.info(f"  - {warning}")
         
         return code
     
@@ -572,36 +724,38 @@ if __name__ == "__main__":
     # 使用 context manager 确保资源正确清理
     with PlaywrightMCPClient(max_iterations=15, timeout=30) as client:
         logger.info("=" * 60)
-        logger.info("🎯 Playwright MCP 测试生成器（增强版 - 支持本地文件）")
+        logger.info("🎯 Playwright MCP 测试生成器")
         logger.info("=" * 60)
         
-        # 方式 1：测试本地 dist 目录中的 HTML 文件
-        test_code = client.generate_test_from_url(
-            url="dist/index.html", 
-            scenario="测试页面的基本功能"
+        # 方式 1：测试本地 dist 目录中的 HTML 文件（使用配置路径）
+        # test_url = config.DIST_DIR / "index.html"
+        # test_code = client.generate_test_from_url(
+        #     url=str(test_url), 
+        #     scenario="测试页面的基本功能"
+        # )
+        
+        # 设置 cookie
+        client.set_cookies(
+            "CASTGC=TGT-0d5f62ed-1be9-40c7-87b5-c16a13e6f748; _cumk=6434a0459898465484747797b59df0ed"
         )
         
-        # 方式 2：测试远程 URL（原有功能）
-        # test_code = client.generate_test_from_url(
-        #     url="http://localhost:3000/",
-        #     scenario="测试 Markdown 编辑器的基本功能"
-        # )
+        # 方式 2：测试远程 URL
+        test_code = client.generate_test_from_url(
+            url="https://canace22.github.io/md-render/",
+            scenario="markdown 编辑器"
+        )
     
         logger.info("=" * 60)
         logger.info("📄 生成的测试代码:")
         logger.info("=" * 60)
-        print(test_code)
+        # print(test_code)
     
-        # 创建目录并保存到文件
-        output_dir = "tests/generated"
-        os.makedirs(output_dir, exist_ok=True)
-    
-        output_file = os.path.join(output_dir, "markdown_editor.spec.js")
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(test_code)
+        # 保存到文件（使用配置路径和公共函数）
+        output_file = config.GENERATED_DIR / "markdown_editor.spec.js"
+        save_test_file(test_code, output_file, config.TEST_FILE_ENCODING)
     
         logger.info("=" * 60)
         logger.info(f"✅ 测试代码已保存到: {output_file}")
         logger.info("=" * 60)
-        logger.info("🚀 运行测试: npx playwright test tests/generated/markdown_editor.spec.js")
+        logger.info(f"🚀 运行测试: npx playwright test {output_file}")
         logger.info("=" * 60)
